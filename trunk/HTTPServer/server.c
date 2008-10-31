@@ -14,12 +14,6 @@ const int maxConnections = 20;
 
 /* timeouts */
 const int serverTimeout = 5;
-/* !!! UWAGA !!!
- *
- * Moim zdaniem serverTimeout jest za duzy :)
- *
- * !!! UWAGA !!!
- */
 const int clientTimeout = 5;
 
 /* other constants */
@@ -113,14 +107,16 @@ int main(int argc, char* argv[])
 	fd_set fsServer;
 	FD_ZERO(&fsServer);
 
+	struct timeval timeout;
+	/* prepare server timeout */
+	timeout.tv_sec = serverTimeout;
+	timeout.tv_usec = 0;
 	/* *************************************************************************
 	 * networking process */
 	int clientNumber;
 	while (*serverState == running) {
 		/* prepare server timeout */
-		struct timeval timeout;
-		timeout.tv_sec = serverTimeout;
-		timeout.tv_usec = 0;
+
 
 		/* select client to connect to */
 		FD_SET(serverSocket, &fsServer);
@@ -131,6 +127,10 @@ int main(int argc, char* argv[])
 		if (foundStatus < 0)
 			printf("Select error\n");
 		else if (!foundStatus) {
+			/* reset server timeout */
+			timeout.tv_sec = serverTimeout;
+			timeout.tv_usec = 0;
+
 			clientNumber = 0;
 			for (i = 0; i < maxConnections; i++) {
 				if (clients[i].status == working)
@@ -156,15 +156,10 @@ int main(int argc, char* argv[])
 			if (clientSocket > maxSD)
 				maxSD = clientSocket;
 
-			/* !!! UWAGA !!!
-			 *
-			 * Jesli jest za duzo polaczen to nie obslugujemy
-			 * Ale socketa chyba trzebaby zamknac co? :)
-			 *
-			 * !!! UWAGA !!!
-			 */
+			/* max number of connections reached */
 			if (clientNumber == maxConnections) {
 				printf("Too many connections\n");
+				close(clientSocket);
 				continue;
 			}
 			clientNumber++;
@@ -176,13 +171,7 @@ int main(int argc, char* argv[])
 			clients[i].status = new;
 			clients[i].sockd = clientSocket;
 			memcpy(&clients[i].clientData, &clientAddr, size);
-			/* !!! CZY TU BYL BUG? !!!
-			 *
-			 * BYLO TAK:
-			 * memcpy(&clients[i], &clientAddr, size);
-			 *
-			 * !!! CZY TU BYL BUG? !!!
-			 */
+
 
 			/* fork here to create process communicating with new client */
 			int pid = fork();
