@@ -2,15 +2,14 @@
  * headers.h
  *
  *  Created on: 2008-10-24
- *      Author: chriss
+ *      Author: chriss, tzok
  */
 
-#ifndef HEADERS_H_
-#define HEADERS_H_
+#ifndef headers_h
+#define headers_h
 
 #include <stdio.h>
 #include <stdlib.h>
-
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -27,4 +26,4 @@
 #include <sys/shm.h>
 #include <sys/wait.h>
 
-#endif /* HEADERS_H_ */
+#endif /* headers_h */

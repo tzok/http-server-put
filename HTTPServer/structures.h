@@ -2,33 +2,32 @@
  * structures.h
  *
  *  Created on: 2008-10-25
- *      Author: chriss
+ *      Author: chriss, tzok
  */
+#ifndef structures_h
+#define structures_h
 
-#ifndef STRUCTURES_H_
-#define STRUCTURES_H_
-/*
- * empty -> wolna jednostka
- * new -> swiezo polaczony klient
- * working -> w trakcie wymiany komunikatow
- * stopped -> zakonczyl wymiane komunikatow, mozna sprawdzic status zakonczenia
- * 			  i zamknac socketa
+/* possible client status */
+enum ClientStatus {
+	empty, /// server has a free unit to process client
+	new, /// client that has just connected
+	working, /// already exchanging messages
+	finished /// finished exchanging messages
+};
+
+/* possible server status */
+enum ServerStatus {
+	running, stopped
+};
+
+/*!
+ * Structure to store information about each connected client
  */
+typedef struct ClientInfo {
+	enum ClientStatus status; /// connection status
+	int sockd; /// socket descriptor
+	int procid; /// id of a process that communicates with client
+	struct sockaddr_in clientData; /// client address information
+} ClientInfo;
 
-#define CI_EMPTY 0
-#define CI_NEW 1
-#define CI_WORKING 2
-#define CI_STOPPED 3
-
-typedef struct clientinfo{
-
-	int status;//stan
-
-	int sockd;//deskryptor socketa
-	int procid;//id procesu komunikujacego sie z klientem
-	struct sockaddr_in clientData;//informacje o kliencie
-
-
-}cokolwiek;//aby warninga 'uniknac useless storage class specifier in empty declaration' ^^
-
-#endif /* STRUCTURES_H_ */
+#endif /* structures_h */
