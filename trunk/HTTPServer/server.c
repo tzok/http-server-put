@@ -6,6 +6,7 @@
  */
 #include "headers.h"
 #include "structures.h"
+#include "pages.h"
 
 /* server configuration */
 const int serverPort = 6666;
@@ -14,13 +15,43 @@ const int maxConnections = 20;
 
 /* timeouts */
 const int serverTimeout = 5;
-const int clientTimeout = 5;
+const int clientTimeout = 3;
 
 /* other constants */
 const int maxCommandLength = 128;
 
+/* possible server status codes */
+enum codes {
+	ok,
+	created,
+	accepted,
+	noContent,
+	movedPermanently,
+	movedTemporarily,
+	notModified,
+	badRequest,
+	unauthorized,
+	forbidden,
+	notFound,
+	internalServerError,
+	notImplemented,
+	badGateway,
+	serviceUnavailable
+};
+const char *statusCode[] = { "200 OK", "201 Created", "202 Accepted",
+		"204 No Content", "301 Moved Permanently", "302 Moved Temporarily",
+		"304 Not Modified", "400 Bad Request", "401 Unauthorized",
+		"403 Forbidden", "404 Not Found", "500 Internal Server Error",
+		"501 Not Implemented", "502 Bad Gateway", "503 Service Unavailable" };
+
+/* server response header which is sent to every request */
+const char *serverHeader = "Server: http-server-put\n"
+	"Content-Type: text/html\n"
+	"\n";
+
 /* prototypes of functions used */
 inline void assert(int, const char*);
+void makeTimestamp(char*);
 
 /**
  * main()
@@ -117,7 +148,6 @@ int main(int argc, char* argv[])
 	while (*serverState == running) {
 		/* prepare server timeout */
 
-
 		/* select client to connect to */
 		FD_SET(serverSocket, &fsServer);
 		int foundStatus = select(maxSD + 1, &fsServer, (fd_set*) 0,
@@ -172,7 +202,6 @@ int main(int argc, char* argv[])
 			clients[i].sockd = clientSocket;
 			memcpy(&clients[i].clientData, &clientAddr, size);
 
-
 			/* fork here to create process communicating with new client */
 			int pid = fork();
 			if (!pid) {
@@ -203,14 +232,48 @@ int main(int argc, char* argv[])
 					}
 
 					if (FD_ISSET(clientSocket, &fsClient)) {
-						char buffer[50];
-						read(clientSocket, buffer, sizeof(buffer));
+						/* read at most 4KB request */
+						char request[4096];
+						read(clientSocket, request, sizeof(request));
 
-						if (buffer[0] == 'x')
-							break;
+						bstring bRequest = bfromcstr(request);
+						struct bstrList *bLines = bsplit(bRequest, '\n');
 
-						const char *msg = "Hello dude :D\n";
-						write(clientSocket, msg, strlen(msg));
+						if (bLines->qty) {
+							struct bstrList *bRequestLine = bsplit(
+									bLines->entry[0], ' ');
+
+							if (bRequestLine->qty == 3) {
+								bstring bMethod = bRequestLine->entry[0];
+								bstring bURI = bRequestLine->entry[1];
+								bstring bHTTPVersion = bRequestLine->entry[2];
+
+								char statusLine[40];
+								sprintf(statusLine, "HTTP/1.0 %s\n",
+										statusCode[forbidden]);
+
+								char dateLine[40];
+								makeTimestamp(dateLine);
+
+								write(clientSocket, statusLine, strlen(
+										statusLine));
+								write(clientSocket, dateLine, strlen(dateLine));
+								write(clientSocket, serverHeader, strlen(
+										serverHeader));
+								write(clientSocket, forbiddenPage, strlen(
+										forbiddenPage));
+
+								myInfo[i].status = stopped;
+
+								bdestroy(bMethod);
+								bdestroy(bURI);
+								bdestroy(bHTTPVersion);
+							}
+
+							bstrListDestroy(bRequestLine);
+						}
+						bstrListDestroy(bLines);
+						bdestroy(bRequest);
 					}
 				}
 				/* ************************************************************/
