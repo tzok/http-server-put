@@ -7,6 +7,7 @@
 #include "headers.h"
 #include "structures.h"
 #include "pages.h"
+#include "prototypes.h"
 
 /* server configuration */
 const int serverPort = 6666;
@@ -51,13 +52,102 @@ const char *serverHeader = "Server: http-server-put\n"
 
 /* prototypes of functions used */
 inline void assert(int, const char*);
-void makeTimestamp(char*);
 
+
+/*!
+ * Get a list of headers from a socket
+ * @param sockd Input socket
+ * @return Pointer to a list of headers
+ */
+struct bstrList * getRequest(int sockd){
+
+	char buf[1024];
+	struct bstrList *requestList;
+	bstring line;
+	bstring all = bfromcstr("");
+	int i=0;
+
+	while(1){
+		do{
+			read(sockd,&buf[i++],1);
+		}while(buf[i-1]!='\n');
+
+		if(i<3)
+			break;
+
+		buf[i]=0x0;
+
+		line = bfromcstr(buf);
+		bconcat(all,line);
+		bdestroy(line);
+		i=0;
+
+	}
+
+	requestList = bsplit(all,'\n');
+	bdestroy(all);
+
+	return requestList;
+
+}
+
+void createRespons(struct bstrList *requestList, char *responseMsg){
+
+	struct bstrList * currentLine;
+	int i;
+
+	if(requestList->qty){
+		for(i=0;i<requestList->qty;i++){
+			/* first line - method verification*/
+			if (!i){
+				currentLine = bsplit(requestList->entry[i], ' ');
+
+
+				bstring getMethod = cstr2bstr("GET");
+				bstring postMethod = cstr2bstr("POST");
+				bstring headMethod = cstr2bstr("HEAD");
+
+				if (!bstrcmp(currentLine->entry[0],getMethod)){
+
+
+				}
+				else if(!bstrcmp(currentLine->entry[0],postMethod)){
+
+
+
+				}
+				else if(!bstrcmp(currentLine->entry[0],headMethod)){
+
+
+
+				}
+
+
+				bdestroy(getMethod);
+				bdestroy(postMethod);
+				bdestroy(headMethod);
+				bstrListDestroy(currentLine);
+			}
+			/* other lines */
+			else{
+
+
+
+
+
+
+			}
+		}
+	}
+	else
+		sprintf(responseMsg, "HTTP/1.0 %s\n", statusCode[badRequest]);
+
+
+}
 /**
  * main()
  */
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
 	/* shared memory block to store server state */
 	int shmId = shmget(10, sizeof(int), 0666 | IPC_CREAT);
 	assert(shmId != -1, "Couldn't create shared memory buffer\n");
@@ -232,11 +322,22 @@ int main(int argc, char* argv[])
 					}
 
 					if (FD_ISSET(clientSocket, &fsClient)) {
-						/* read at most 4KB request */
-						char request[4096];
-						read(clientSocket, request, sizeof(request));
+
+						char *request; //[4096];
+						//read(clientSocket, request, sizeof(request));
+
+						/* read the socket */
+						struct bstrList *tempList = getRequest(clientSocket);
+
+						request = bstr2cstr(tempList->entry[0], '\0');
+
+
 
 						bstring bRequest = bfromcstr(request);
+						bcstrfree(request);
+						bstrListDestroy(tempList);
+
+
 						struct bstrList *bLines = bsplit(bRequest, '\n');
 
 						if (bLines->qty) {
@@ -249,11 +350,18 @@ int main(int argc, char* argv[])
 								bstring bHTTPVersion = bRequestLine->entry[2];
 
 								char statusLine[40];
+
 								sprintf(statusLine, "HTTP/1.0 %s\n",
 										statusCode[forbidden]);
 
+
 								char dateLine[40];
-								makeTimestamp(dateLine);
+
+								//makeTimestamp(dateLine);
+
+								struct tm tempDate;
+								now(&tempDate);
+								dateToStr(dateLine, &tempDate);
 
 								write(clientSocket, statusLine, strlen(
 										statusLine));
@@ -264,6 +372,8 @@ int main(int argc, char* argv[])
 										forbiddenPage));
 
 								myInfo[i].status = stopped;
+
+
 
 								bdestroy(bMethod);
 								bdestroy(bURI);
@@ -311,8 +421,7 @@ int main(int argc, char* argv[])
  * @param expr boolean expression to check
  * @param msg message to display if condition is not met
  */
-inline void assert(int expr, const char *msg)
-{
+inline void assert(int expr, const char *msg) {
 	if (!expr) {
 		printf(msg);
 		exit(1);
