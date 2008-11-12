@@ -12,7 +12,8 @@ enum ClientStatus {
 	empty, /// server has a free unit to process client
 	new, /// client that has just connected
 	working, /// already exchanging messages
-	finished /// finished exchanging messages
+	finished
+/// finished exchanging messages
 };
 
 /* possible server status */
