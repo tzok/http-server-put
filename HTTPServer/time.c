@@ -1,29 +1,4 @@
 #include "headers.h"
-//#include <time.h>
-/*!
- * Create a timestamp according to RFC 822
- * @param buffer Pointer to memory location where output will be saved
- */
-
-/*
- void makeTimestamp(char *buffer)
- {
- time_t reference;
- time(&reference);
- struct tm *curTime = gmtime(&reference);
-
- // week starts with Sunday
- char *wkday[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
- char *month[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
- "Sep", "Oct", "Nov", "Dec" };
- sprintf(buffer, "Date: %s, %02d %s %04d %02d:%02d:%02d GMT\n",
- wkday[curTime->tm_wday], curTime->tm_mday, month[curTime->tm_mon],
- 1900 + curTime->tm_year, curTime->tm_hour, curTime->tm_min,
- curTime->tm_sec);
- }
- */
-
-/* parses a date encoded in 'buffer' to a standard ANSI C date/time representation */
 
 /*!
  * parses a date encoded in 'buffer' to a standard ANSI C date/time representation
@@ -31,7 +6,6 @@
  * @param buffer Pointer to memory containing a date in one of the forms mentioned above
  * @param date Pointer to memory where the standarized date/time structure will be saved
  */
-
 void parseDate(const char *buffer, struct tm *date) {
 
 	int len;
@@ -55,7 +29,6 @@ void parseDate(const char *buffer, struct tm *date) {
 		/* RFC 850, obsoleted by RFC 1036; firstElement "[weekdey],
 		 * " */
 	default:
-
 		strptime(buffer, "%A, %d-%b-%y %T GMT", date);
 	}
 

@@ -23,12 +23,10 @@
 #include <string.h>
 #include <time.h>
 
-
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
 #include <sys/stat.h>//for getting file modification date
-
 #include "bstring/bstrlib.h"
 
 void strptime(const char *, const char *, struct tm *);//warning prevention
