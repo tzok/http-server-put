@@ -79,8 +79,8 @@ void now(struct tm *date) {
  * @param buffer Pointer to memory where RFC-1123 date will be saved
  * @param date Pointer to the date being converted
  */
-void dateToStr(char *buffer, const struct tm *date) {
-	strftime(buffer, 40, "Date: %a, %d %b %Y %T GMT\n", date);
+int dateToStr(char *buffer, const struct tm *date) {
+	return strftime(buffer, 40, "Date: %a, %d %b %Y %T GMT\n", date);
 }
 
 /*!

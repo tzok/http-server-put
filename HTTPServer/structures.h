@@ -7,6 +7,11 @@
 #ifndef structures_h
 #define structures_h
 
+enum Bool {
+	false,
+	true
+};
+
 /* possible client status */
 enum ClientStatus {
 	empty, /// server has a free unit to process client

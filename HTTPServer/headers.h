@@ -8,12 +8,13 @@
 #ifndef headers_h
 #define headers_h
 
+#define _ATFILE_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <fcntl.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
-
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/param.h>
@@ -22,11 +23,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
-#include <sys/stat.h>//for getting file modification date
 #include "bstring/bstrlib.h"
 
 void strptime(const char *, const char *, struct tm *);//warning prevention

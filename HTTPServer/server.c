@@ -8,6 +8,7 @@
 #include "structures.h"
 #include "pages.h"
 #include "prototypes.h"
+#include "mime.h"
 
 /* server configuration */
 const int serverPort = 6666;
@@ -48,7 +49,7 @@ const char *statusCode[] = { "200 OK", "201 Created", "202 Accepted",
 /* server response header which is sent to every request */
 const char *serverHeader = "Server: http-server-put\n"
 	"Content-Length: %d\n"
-	"Content-Type: text/html\n"
+	"Content-Type: %s\n"
 	"\n";
 
 /* prototypes of functions used */
@@ -89,43 +90,99 @@ struct bstrList* getRequest(int sockd) {
 	return requestList;
 }
 
-bstring makeResponseBody(enum codes status, char *entity) {
+/*!
+ * Creates a buffer with correct HTTP/1.0 response
+ * @param status Status code of given operation
+ * @param contentType Literal containing one of possible MIME types
+ * @param entitySize Size of entity body
+ * @param entity Pointer to entity content
+ */
+char* makeResponseBody(enum codes status, const char *contentType,
+		int entitySize, char *entity, int *responseSize) {
 	/* status line */
-	bstring bResponse = bformat("HTTP/1.0 %s\n", statusCode[notImplemented]);
+	char statusLine[64];
+	int statusSize = sprintf(statusLine, "HTTP/1.0 %s\n", statusCode[status]);
 
 	/* line with date */
 	char dateLine[40];
 	struct tm current;
 	now(&current);
-	dateToStr(dateLine, &current);
-	bformata(bResponse, "%s", dateLine);
+	int dateSize = dateToStr(dateLine, &current);
 
 	/* rest of headers including content-length */
-	bformata(bResponse, serverHeader, strlen(entity));
+	char headerLines[256];
+	int headersSize = sprintf(headerLines, serverHeader, entitySize,
+			contentType);
 
-	/* entity body */
-	bformata(bResponse, "%s", entity);
-	return bResponse;
+	/* create response */
+	char *response = (char*) malloc(statusSize + dateSize + headersSize
+			+ entitySize);
+	int i, j = 0;
+	for (i = 0; i < statusSize; ++i)
+		response[j++] = statusLine[i];
+	for (i = 0; i < dateSize; ++i)
+		response[j++] = dateLine[i];
+	for (i = 0; i < headersSize; ++i)
+		response[j++] = headerLines[i];
+	for (i = 0; i < entitySize; ++i)
+		response[j++] = entity[i];
+	*responseSize = j;
+	return response;
 }
 
-bstring createResponse(struct bstrList *requestList) {
-	struct bstrList * currentLine;
-	bstring bResponse;
+/*!
+ * Creates a response to GET method
+ */
+char* createResponse(struct bstrList *requestList, int *responseSize) {
+	struct bstrList *currentLine;
+	char *response;
 
 	currentLine = bsplit(requestList->entry[0], ' ');
 
 	if (biseqcstr(currentLine->entry[0], "GET")) {
-		bResponse = makeResponseBody(badRequest, (char*) badRequestPage);
-	} else if (biseqcstr(currentLine->entry[0], "POST")) {
-		bResponse = makeResponseBody(badRequest, (char*) badRequestPage);
-	} else if (biseqcstr(currentLine->entry[0], "HEAD"))
-		bResponse = makeResponseBody(ok, "");
-	else
-		bResponse
-				= makeResponseBody(notImplemented, (char*) notImplementedPage);
+		bdelete(currentLine->entry[1], 0, 1); // to remove unnecessary "/" character
+		int fd = openat(AT_FDCWD, (const char*) bdata(currentLine->entry[1]), O_RDONLY);
+		if (fd < 0)
+			response = makeResponseBody(notFound, "text/html; charset=utf-8",
+					strlen(notFoundPage), (char*) notFoundPage, responseSize);
+		else {
+			/* distinguish file type from extension */
+			int i, j, k;
+			char *contentType = "application/octet-stream";
+			char *data = (char*) bdata(currentLine->entry[1]);
+			for (i = currentLine->entry[1]->slen - 1; i >= 0; --i)
+				if (data[i] == '.')
+					break;
+			if (i > 0) {
+				char extension[currentLine->entry[1]->slen - i];
+				for (k = 0, j = i + 1; j < currentLine->entry[1]->slen; ++j, ++k)
+					extension[k] = tolower(data[j]);
+				extension[k] = 0;
+				printf("%s\n", extension);
+				for (j = 0; j < mimeTypeCount; ++j)
+					if (!(strcmp(extension, mimeExtensions[j])))
+						break;
+				contentType = mimeTypes[j];
+			}
 
+			int size = lseek(fd, 0, SEEK_END);
+			char *buffer = (char*) malloc(size);
+			lseek(fd, SEEK_SET, 0);
+			read(fd, buffer, size);
+			response = makeResponseBody(ok, contentType, size, buffer,
+					responseSize);
+
+		}
+	} else if (biseqcstr(currentLine->entry[0], "POST")) {
+
+	} else if (biseqcstr(currentLine->entry[0], "HEAD")) {
+
+	} else
+		response = makeResponseBody(notImplemented, "text/html; charset=utf-8",
+				strlen(notImplementedPage), (char*) notImplementedPage,
+				responseSize);
 	bstrListDestroy(currentLine);
-	return bResponse;
+	return response;
 }
 /**
  * main()
@@ -307,8 +364,11 @@ int main(int argc, char* argv[]) {
 					if (FD_ISSET(clientSocket, &fsClient)) {
 						/* read the socket */
 						struct bstrList *tempList = getRequest(clientSocket);
-						bstring bResponse = createResponse(tempList);
-						write(clientSocket, bdata(bResponse), blength(bResponse));
+						int responseSize;
+						char *response =
+								createResponse(tempList, &responseSize);
+						write(clientSocket, response, responseSize);
+						free(response);
 					}
 				}
 				/* ************************************************************/
@@ -324,12 +384,12 @@ int main(int argc, char* argv[]) {
 	/* ************************************************************************/
 
 	/* cleaning client data */
-	if (clientNumber> 0) {
+	if (clientNumber > 0) {
 		for (i = 0; i < maxConnections; i++)
-		clients[i].status = finished;
+			clients[i].status = finished;
 		sleep(clientTimeout + 1);
 		for (i = 0; i < maxConnections; i++)
-		close(clients[i].sockd);
+			close(clients[i].sockd);
 	}
 
 	/* close socket and free shared memory */
@@ -341,11 +401,11 @@ int main(int argc, char* argv[]) {
 	return 0;
 }
 
-						/**
-						 * Ensures some conditions are met. Otherwise, exits the application with error message
-						 * @param expr boolean expression to check
-						 * @param msg message to display if condition is not met
-						 */
+/**
+ *Ensures some conditions are met. Otherwise, exits the application with error message
+ * @param expr boolean expression to check
+ * @param msg message to display if condition is not met
+ */
 inline void assert(int expr, const char *msg) {
 	if (!expr) {
 		printf(msg);
