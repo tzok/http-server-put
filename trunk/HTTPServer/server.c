@@ -54,6 +54,7 @@ const char *serverHeader = "Server: http-server-put\n"
 
 /* prototypes of functions used */
 inline void assert(int, const char*);
+char* createListPage(char*);
 
 /*!
  * Get a list of headers from a socket
@@ -69,24 +70,21 @@ struct bstrList* getRequest(int sockd) {
 
 	/* read incoming bytes until one empty line is found */
 	while (1) {
-		do {
-			read(sockd, &buf[i++], 1);
-		} while (buf[i - 1] != '\n');
+		while (read(sockd, &buf[i], 1) == 1)
+			if (buf[i++] == '\n')
+				break;
 
 		if (i < 3)
 			break;
 
-		buf[i] = 0x0;
-
+		buf[i] = 0;
 		line = bfromcstr(buf);
 		bconcat(all, line);
 		bdestroy(line);
 		i = 0;
 	}
-
 	requestList = bsplit(all, '\n');
 	bdestroy(all);
-
 	return requestList;
 }
 
@@ -134,56 +132,181 @@ char* makeResponseBody(enum codes status, const char *contentType,
  * Creates a response to GET method
  */
 char* createResponse(struct bstrList *requestList, int *responseSize) {
-	struct bstrList *currentLine;
+	bstring method = 0, uri = 0, version = 0;
 	char *response;
+	struct bstrList *currentLine = 0;
 
+	/* read request line */
 	currentLine = bsplit(requestList->entry[0], ' ');
+	if (currentLine->qty != 3) {
+		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
+				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+		goto ResponseCreated;
+	}
 
-	if (biseqcstr(currentLine->entry[0], "GET")) {
-		bdelete(currentLine->entry[1], 0, 1); // to remove unnecessary "/" character
-		int fd = openat(AT_FDCWD, (const char*) bdata(currentLine->entry[1]), O_RDONLY);
-		if (fd < 0)
+	method = currentLine->entry[0];
+	uri = currentLine->entry[1];
+	version = currentLine->entry[2];
+
+	/* filter empty requests */
+	if (!method->slen || !uri->slen || !version->slen) {
+		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
+				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+		goto ResponseCreated;
+	}
+
+	/* check http version */
+	int httpVersion;
+	if (!(strncmp((const char*) version->data, "HTTP/0.9", 8)))
+		httpVersion = http_0_9;
+	else if (!(strncmp((const char*) version->data, "HTTP/1.0", 8)))
+		httpVersion = http_1_0;
+	else if (!(strncmp((const char*) version->data, "HTTP/1.1", 8)))
+		httpVersion = http_1_1;
+	else {
+		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
+				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+		goto ResponseCreated;
+	}
+
+	/* GET */
+	if (biseqcstr(method, "GET")) {
+		/* request for root directory */
+		if (blength(uri) == 1 && uri->data[0] == '/') {
+			char *listPage = createListPage("");
+			response = makeResponseBody(ok, "text/html; charset=utf-8", strlen(
+					listPage), listPage, responseSize);
+			free(listPage);
+			goto ResponseCreated;
+		}
+
+		/* check if resource exists */
+		int fd = openat(AT_FDCWD, (const char*) &uri->data[1], O_RDONLY);
+		if (fd < 0) {
 			response = makeResponseBody(notFound, "text/html; charset=utf-8",
 					strlen(notFoundPage), (char*) notFoundPage, responseSize);
-		else {
-			/* distinguish file type from extension */
-			int i, j, k;
-			char *contentType = "application/octet-stream";
-			char *data = (char*) bdata(currentLine->entry[1]);
-			for (i = currentLine->entry[1]->slen - 1; i >= 0; --i)
-				if (data[i] == '.')
-					break;
-			if (i > 0) {
-				char extension[currentLine->entry[1]->slen - i];
-				for (k = 0, j = i + 1; j < currentLine->entry[1]->slen; ++j, ++k)
-					extension[k] = tolower(data[j]);
-				extension[k] = 0;
-				printf("%s\n", extension);
-				for (j = 0; j < mimeTypeCount; ++j)
-					if (!(strcmp(extension, mimeExtensions[j])))
-						break;
-				contentType = mimeTypes[j];
-			}
-
-			int size = lseek(fd, 0, SEEK_END);
-			char *buffer = (char*) malloc(size);
-			lseek(fd, SEEK_SET, 0);
-			read(fd, buffer, size);
-			response = makeResponseBody(ok, contentType, size, buffer,
-					responseSize);
-
+			goto ResponseCreated;
 		}
+
+		/* check if it's a directory or file */
+		struct stat attrib;
+		fstatat(AT_FDCWD, (const char*) &uri->data[1], &attrib, 0);
+
+		/* if directory, then list its content */
+		if (S_ISDIR(attrib.st_mode)) {
+			/* if URI does not end with'/', then redirect */
+			if (uri->data[uri->slen - 1] != '/') {
+				char additionalHeader[128];
+				sprintf(
+						additionalHeader,
+						"text/html; charset=utf-8\nLocation: http://localhost:6666%s/",
+						uri->data);
+				response = makeResponseBody(movedPermanently, additionalHeader,
+						0, 0, responseSize);
+				goto ResponseCreated;
+			}
+			char *listPage = createListPage((char*) uri->data);
+			response = makeResponseBody(ok, "text/html; charset=utf-8",
+					strlen(listPage), listPage, responseSize);
+			free(listPage);
+			goto ResponseCreated;
+		}
+
+		/* distinguish mime type from extension */
+		int i, j, k;
+		char *contentType = "application/octet-stream";
+		char *data = (char*) uri->data;
+		for (i = currentLine->entry[1]->slen - 1; i >= 0; --i)
+			if (data[i] == '.')
+				break;
+		if (i > 0) {
+			char extension[uri->slen - i];
+			for (k = 0, j = i + 1; j < currentLine->entry[1]->slen; ++j, ++k)
+				extension[k] = tolower(data[j]);
+			extension[k] = 0;
+			for (j = 0; j < mimeTypeCount; ++j)
+				if (!(strcmp(extension, mimeExtensions[j])))
+					break;
+			contentType = mimeTypes[j];
+		}
+
+		int size = lseek(fd, 0, SEEK_END);
+		char *buffer = (char*) malloc(size);
+		lseek(fd, SEEK_SET, 0);
+		read(fd, buffer, size);
+		response = makeResponseBody(ok, contentType, size, buffer,
+				responseSize);
+		free(buffer);
+		goto ResponseCreated;
+
+		/* POST */
 	} else if (biseqcstr(currentLine->entry[0], "POST")) {
 
+		/* HEAD */
 	} else if (biseqcstr(currentLine->entry[0], "HEAD")) {
 
 	} else
-		response = makeResponseBody(notImplemented, "text/html; charset=utf-8",
-				strlen(notImplementedPage), (char*) notImplementedPage,
-				responseSize);
-	bstrListDestroy(currentLine);
+		return makeResponseBody(badRequest, "text/html; charset=utf-8", strlen(
+				notImplementedPage), (char*) notImplementedPage, responseSize);
+
+	/* clean up all the structures used */
+	ResponseCreated: if (method)
+		bdestroy(method);
+	if (uri)
+		bdestroy(uri);
+	if (version)
+		bdestroy(version);
+	if (currentLine)
+		bstrListDestroy(currentLine);
+
 	return response;
 }
+
+/*!
+ * Creates listing of a directory as a HTML page
+ * @param path Path to a directory
+ * @return HTML showing directory listing
+ */
+char* createListPage(char *path) {
+	/* create absolute path to directory */
+	char buffer[256];
+	getcwd(buffer, sizeof(buffer));
+	strcat(buffer, path);
+
+	/* list files in it */
+	struct dirent **namelist;
+	int count = scandir(buffer, &namelist, 0, alphasort);
+
+	/* prepare final page */
+	const char* start = "<html>\n"
+		"	<head>\n"
+		"		<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"/>\n"
+		"		<meta name=\"Author\" content=\"Tomasz Zok, Krzystof Rosinski\"/>\n"
+		"	</head>\n"
+		"	\n"
+		"	<body>\n";
+	const char* element = "	<a href='%s'>%s</a></br>\n";
+	const char* end = "	</body>\n"
+		"</html>\n";
+	char *page = (char*) malloc(strlen(start) + strlen(end) + count * 512);
+	strcpy(page, start);
+
+	/* add files and subfolders to this page */
+	int i;
+	for (i = 0; i < count; ++i) {
+		if ((strcmp(namelist[i]->d_name, ".")) && (strcmp(namelist[i]->d_name,
+				".."))) {
+			char file[256];
+			sprintf(file, element, namelist[i]->d_name, namelist[i]->d_name);
+			strcat(page, file);
+		}
+		free(namelist[i]);
+	}
+	free(namelist);
+	strcat(page, end);
+	return page;
+}
+
 /**
  * main()
  */
@@ -252,7 +375,7 @@ int main(int argc, char* argv[]) {
 	assert(serverSocket != -1, "Couldn't create socket\n");
 
 	/* let the system reuse this socket right after its closing */
-	int optval;
+	int optval = 0;
 	setsockopt(serverSocket, SOL_SOCKET,SO_REUSEADDR, &optval, sizeof(optval));
 
 	/* bind the socket */
@@ -274,10 +397,8 @@ int main(int argc, char* argv[]) {
 	timeout.tv_usec = 0;
 	/* *************************************************************************
 	 * networking process */
-	int clientNumber;
+	int clientNumber = 0;
 	while (*serverState == running) {
-		/* prepare server timeout */
-
 		/* select client to connect to */
 		FD_SET(serverSocket, &fsServer);
 		int foundStatus = select(maxSD + 1, &fsServer, (fd_set*) 0,
@@ -307,7 +428,7 @@ int main(int argc, char* argv[]) {
 		/* process new connection */
 		if (FD_ISSET(serverSocket, &fsServer)) {
 			struct sockaddr_in clientAddr;
-			int size;
+			int size = 0;
 			int clientSocket = accept(serverSocket,
 					(struct sockaddr*) &clientAddr, (socklen_t*) &size);
 			assert(clientSocket != -1,
@@ -369,6 +490,7 @@ int main(int argc, char* argv[]) {
 								createResponse(tempList, &responseSize);
 						write(clientSocket, response, responseSize);
 						free(response);
+						bstrListDestroy(tempList);
 					}
 				}
 				/* ************************************************************/

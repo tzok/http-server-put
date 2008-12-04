@@ -12,6 +12,12 @@ enum Bool {
 	true
 };
 
+enum HTTPVersion {
+	http_0_9,
+	http_1_0,
+	http_1_1
+};
+
 /* possible client status */
 enum ClientStatus {
 	empty, /// server has a free unit to process client

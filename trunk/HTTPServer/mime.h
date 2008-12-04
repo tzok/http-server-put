@@ -78,4 +78,4 @@ char *mimeTypes[] = { "application/andrew-inset", "application/finale",
 		"video/x-ms-wvx", "video/quicktime", "video/quicktime",
 		"video/x-msvideo", "video/x-sgi-movie", "x-conference/x-cooltalk",
 		"x-world/x-3dmf", "x-world/x-3dmf", "x-world/x-3dmf", "x-world/x-3dmf",
-		"x-world/x-vrml", "x-world/x-vrml", "application/octet-stream" };
+		"x-world/x-vrml", "x-world/x-vrml", "application/octet-stream", "application/octet-stream"};
