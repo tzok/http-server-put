@@ -26,6 +26,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
+#include <dirent.h>
 #include "bstring/bstrlib.h"
 
 void strptime(const char *, const char *, struct tm *);//warning prevention
