@@ -1,8 +1,8 @@
-/*
- * server.c
- *
- *  Created on: 2008-10-24
- *      Author: chriss, tzok
+/**
+ * @mainpage Our project http-server-put is an implementation of HTTP/1.0 server according to RFC 1945 document.
+ * @author Tomasz Zok, Krzysztof Rosinski
+ * @date 05-12-2008
+ * @version 1.0
  */
 #include "headers.h"
 #include "structures.h"
@@ -17,7 +17,7 @@ const int maxConnections = 20;
 
 /* timeouts */
 const int serverTimeout = 5;
-const int clientTimeout = 3;
+const int clientTimeout = 5;
 
 /* other constants */
 const int maxCommandLength = 128;
@@ -55,8 +55,13 @@ const char *serverHeader = "Server: http-server-put\n"
 /* prototypes of functions used */
 inline void assert(int, const char*);
 char* createListPage(char*);
+void decode(char*, char*);
 
-/*!
+/* global variables */
+Realm realm[32];
+int realmCount = 0;
+
+/**
  * Get a list of headers from a socket
  * @param sockd Input socket
  * @return Pointer to a list of headers
@@ -88,12 +93,14 @@ struct bstrList* getRequest(int sockd) {
 	return requestList;
 }
 
-/*!
+/**
  * Creates a buffer with correct HTTP/1.0 response
- * @param status Status code of given operation
- * @param contentType Literal containing one of possible MIME types
- * @param entitySize Size of entity body
- * @param entity Pointer to entity content
+ * @param[in] status Status code of given operation
+ * @param[in] contentType Literal containing one of possible MIME types
+ * @param[in] entitySize Size of entity body
+ * @param[in] entity Pointer to entity content
+ * @param[out] responseSize Will contain size of created response
+ * @return Pointer to buffer containig full response
  */
 char* makeResponseBody(enum codes status, const char *contentType,
 		int entitySize, char *entity, int *responseSize) {
@@ -128,8 +135,11 @@ char* makeResponseBody(enum codes status, const char *contentType,
 	return response;
 }
 
-/*!
- * Creates a response to GET method
+/**
+ * Creates a response to GET method. This method analyzes incoming requests and responses appropriately
+ * @param[in] requestList List of lines of full HTTP/1.x request
+ * @param[out] responseSize Will contain size of created response
+ * @return Full HTTP/1.0 response with requested URI or an error page
  */
 char* createResponse(struct bstrList *requestList, int *responseSize) {
 	bstring method = 0, uri = 0, version = 0;
@@ -170,7 +180,76 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 	}
 
 	/* GET */
+	int i, j, k;
 	if (biseqcstr(method, "GET")) {
+		/* check if authorization header was sent */
+		for (i = 1; i < requestList->qty; ++i) {
+			if (!(strncmp((char *) requestList->entry[i]->data,
+					"Authorization:", 14)))
+				break;
+		}
+		int isAuthenticated;
+		char login[256], pass[256];
+		memset(login, 0, sizeof(login));
+		memset(pass, 0, sizeof(pass));
+		if (i == requestList->qty)
+			isAuthenticated = false;
+		else {
+			/* if client authorizes itself, decode base64 data */
+			isAuthenticated = true;
+			char dataEncoded[256], dataDecoded[256];
+			memset(dataEncoded, 0, sizeof(dataEncoded));
+			memset(dataDecoded, 0, sizeof(dataDecoded));
+			for (j = strlen("Authorization: Basic "), k = 0; j
+					< requestList->entry[i]->slen; ++j, ++k)
+				dataEncoded[k] = requestList->entry[i]->data[j];
+			dataEncoded[k] = 0;
+			decode(dataEncoded, dataDecoded);
+
+			/* split decoded input into login and pass */
+			char *cur = dataDecoded;
+			char *which = login;
+			while (*cur) {
+				if (*cur == ':')
+					which = pass;
+				else
+					*(which++) = *cur;
+				++cur;
+			}
+		}
+
+		/* check if access is authenticated */
+		for (i = 0; i < realmCount; ++i) {
+			for (j = 0; j < realm[i].count; ++j)
+				if (!(strcmp((char*) uri->data, realm[i].uri[j])))
+					break;
+			if (j != realm[i].count)
+				break;
+		}
+		if (i != realmCount) {
+			/* if access is authenticated, yet no authorization from client
+			 * send 401 Unathorized */
+			if (!isAuthenticated) {
+				char additionalHeader[256];
+				sprintf(
+						additionalHeader,
+						"text/html; charset=utf-8\nWWW-Authenticate: Basic realm=\"%s\"",
+						realm[i].name);
+				response = makeResponseBody(unauthorized, additionalHeader,
+						strlen(unauthorizedPage), (char*) unauthorizedPage,
+						responseSize);
+				goto ResponseCreated;
+				/* if access is authentitaced, yet authorization fails
+				 * send 403 Forbidden */
+			} else if (strcmp(login, realm[i].login) || strcmp(pass,
+					realm[i].pass)) {
+				response = makeResponseBody(forbidden,
+						"text/html; charset=utf-8", strlen(forbiddenPage),
+						(char*) forbiddenPage, responseSize);
+				goto ResponseCreated;
+			}
+		}
+
 		/* request for root directory */
 		if (blength(uri) == 1 && uri->data[0] == '/') {
 			char *listPage = createListPage("");
@@ -206,14 +285,13 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 				goto ResponseCreated;
 			}
 			char *listPage = createListPage((char*) uri->data);
-			response = makeResponseBody(ok, "text/html; charset=utf-8",
-					strlen(listPage), listPage, responseSize);
+			response = makeResponseBody(ok, "text/html; charset=utf-8", strlen(
+					listPage), listPage, responseSize);
 			free(listPage);
 			goto ResponseCreated;
 		}
 
 		/* distinguish mime type from extension */
-		int i, j, k;
 		char *contentType = "application/octet-stream";
 		char *data = (char*) uri->data;
 		for (i = currentLine->entry[1]->slen - 1; i >= 0; --i)
@@ -230,12 +308,13 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 			contentType = mimeTypes[j];
 		}
 
+		/* read requested URI and create a response out of it */
 		int size = lseek(fd, 0, SEEK_END);
 		char *buffer = (char*) malloc(size);
 		lseek(fd, SEEK_SET, 0);
 		read(fd, buffer, size);
-		response = makeResponseBody(ok, contentType, size, buffer,
-				responseSize);
+		response
+				= makeResponseBody(ok, contentType, size, buffer, responseSize);
 		free(buffer);
 		goto ResponseCreated;
 
@@ -246,8 +325,9 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 	} else if (biseqcstr(currentLine->entry[0], "HEAD")) {
 
 	} else
-		return makeResponseBody(badRequest, "text/html; charset=utf-8", strlen(
-				notImplementedPage), (char*) notImplementedPage, responseSize);
+		return makeResponseBody(notImplemented, "text/html; charset=utf-8",
+				strlen(notImplementedPage), (char*) notImplementedPage,
+				responseSize);
 
 	/* clean up all the structures used */
 	ResponseCreated: if (method)
@@ -262,7 +342,7 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 	return response;
 }
 
-/*!
+/**
  * Creates listing of a directory as a HTML page
  * @param path Path to a directory
  * @return HTML showing directory listing
@@ -286,8 +366,11 @@ char* createListPage(char *path) {
 		"	\n"
 		"	<body>\n";
 	const char* element = "	<a href='%s'>%s</a></br>\n";
-	const char* end = "	</body>\n"
-		"</html>\n";
+	const char
+			* end =
+					"	<br/>\n	Server: http-server-put<br/>Software written by: Tomasz Zok, Krzysztof Rosinski</br>\n"
+						"	</body>\n"
+						"</html>\n";
 	char *page = (char*) malloc(strlen(start) + strlen(end) + count * 512);
 	strcpy(page, start);
 
@@ -307,10 +390,52 @@ char* createListPage(char *path) {
 	return page;
 }
 
-/**
+/*
  * main()
  */
 int main(int argc, char* argv[]) {
+	/* parse configuration file */
+	FILE *file = fopen("config", "r");
+	if (file) {
+		char line[256];
+		int isRealm = false;
+		while (!feof(file)) {
+			if (!fgets(line, sizeof(line), file))
+				break;
+			int i;
+			/* line starting new realm is like: [%s] */
+			if (line[0] == '[' && line[strlen(line) - 1 == ']']) {
+				for (i = 1; i < strlen(line) - 2; ++i)
+					realm[realmCount].name[i - 1] = line[i];
+				realm[realmCount].name[i - 1] = 0;
+				isRealm = true;
+				realm[realmCount].count = 0;
+			/* line with login is like: login=%s */
+			} else if (isRealm && !(strncmp(line, "login=", 6))) {
+				for (i = 6; i < strlen(line) - 1; ++i)
+					realm[realmCount].login[i - 6] = line[i];
+				realm[realmCount].login[i - 6] = 0;
+			/* line with password is like: pass=%s */
+			} else if (isRealm && !(strncmp(line, "pass=", 5))) {
+				for (i = 5; i < strlen(line) - 1; ++i)
+					realm[realmCount].pass[i - 5] = line[i];
+				realm[realmCount].pass[i - 5] = 0;
+			/* lines with URIs are like: uri=%s */
+			} else if (isRealm && !(strncmp(line, "uri=", 4))) {
+				for (i = 4; i < strlen(line) - 1; ++i)
+					realm[realmCount].uri[realm[realmCount].count][i - 4]
+							= line[i];
+				realm[realmCount].uri[realm[realmCount].count++][i - 4] = 0;
+			/* empty line finishes one realm configuration */
+			} else if (line[0] == '\n') {
+				++realmCount;
+				isRealm = false;
+			}
+		}
+		++realmCount;
+		fclose(file);
+	}
+
 	/* shared memory block to store server state */
 	int shmId = shmget(10, sizeof(int), 0666 | IPC_CREAT);
 	assert(shmId != -1, "Couldn't create shared memory buffer\n");
@@ -480,6 +605,7 @@ int main(int argc, char* argv[]) {
 						exitRes = 1;
 						break;
 					} else if (!selectRes) {
+						break;
 					}
 
 					if (FD_ISSET(clientSocket, &fsClient)) {
@@ -524,7 +650,7 @@ int main(int argc, char* argv[]) {
 }
 
 /**
- *Ensures some conditions are met. Otherwise, exits the application with error message
+ * Ensures some conditions are met. Otherwise, exits the application with error message
  * @param expr boolean expression to check
  * @param msg message to display if condition is not met
  */

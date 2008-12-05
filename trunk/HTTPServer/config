@@ -1,3 +1,5 @@
-
-
-[Test]
+[Test1]
+login=Test1
+pass=Test
+uri=/example/example.png
+uri=/example/example.html

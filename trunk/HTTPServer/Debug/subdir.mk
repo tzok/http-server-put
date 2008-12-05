@@ -4,14 +4,17 @@
 
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
+../base64.c \
 ../server.c \
 ../time.c 
 
 OBJS += \
+./base64.o \
 ./server.o \
 ./time.o 
 
 C_DEPS += \
+./base64.d \
 ./server.d \
 ./time.d 
 

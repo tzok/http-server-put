@@ -27,6 +27,15 @@ enum ClientStatus {
 /// finished exchanging messages
 };
 
+/* realms for authentication */
+typedef struct Realm {
+	char name[256];
+	char login[256];
+	char pass[256];
+	char uri[256][256];
+	int count;
+} Realm;
+
 /* possible server status */
 enum ServerStatus {
 	running, stopped
