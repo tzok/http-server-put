@@ -9,6 +9,17 @@ const char* badRequestPage = "<html>\n"
 	"	</body>\n"
 	"</html>\n";
 
+const char* unauthorizedPage = "<html>\n"
+	"	<head>\n"
+	"		<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"/>\n"
+	"		<meta name=\"Author\" content=\"Tomasz Zok, Krzystof Rosinski\"/>\n"
+	"	</head>\n"
+	"	\n"
+	"	<body>\n"
+	"	Error 401<br />Unauthorized access\n"
+	"	</body>\n"
+	"</html>\n";
+
 const char* forbiddenPage = "<html>\n"
 	"	<head>\n"
 	"		<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"/>\n"
