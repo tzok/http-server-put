@@ -69,12 +69,14 @@ int realmCount = 0;
 struct bstrList* getRequest(int sockd) {
 	char buf[1024];
 	struct bstrList *requestList;
+	struct bstrList *tempList;
 	bstring line;
 	bstring all = bfromcstr("");
 	int i = 0;
-
+	int count = 0;
 	/* read incoming bytes until one empty line is found */
 	while (1) {
+
 		while (read(sockd, &buf[i], 1) == 1)
 			if (buf[i++] == '\n')
 				break;
@@ -84,9 +86,25 @@ struct bstrList* getRequest(int sockd) {
 
 		buf[i] = 0;
 		line = bfromcstr(buf);
+
 		bconcat(all, line);
-		bdestroy(line);
+
 		i = 0;
+		if (!count) {
+			tempList = bsplit(line, ' ');
+			if (tempList->qty > 2) {
+				if (!strncmp((const char*) tempList->entry[2]->data,
+						"HTTP/0.9", 8)) {
+					bdestroy(line);
+					bstrListDestroy(tempList);
+					break;
+				} else
+					bstrListDestroy(tempList);
+			}
+
+		}
+		bdestroy(line);
+		++count;
 	}
 	requestList = bsplit(all, '\n');
 	bdestroy(all);
@@ -103,35 +121,45 @@ struct bstrList* getRequest(int sockd) {
  * @return Pointer to buffer containig full response
  */
 char* makeResponseBody(enum codes status, const char *contentType,
-		int entitySize, char *entity, int *responseSize) {
-	/* status line */
-	char statusLine[64];
-	int statusSize = sprintf(statusLine, "HTTP/1.0 %s\n", statusCode[status]);
+		int entitySize, char *entity, int *responseSize, int httpVersion) {
 
-	/* line with date */
-	char dateLine[40];
-	struct tm current;
-	now(&current);
-	int dateSize = dateToStr(dateLine, &current);
+	char *response;
+	/* in case of http/0.9 response */
+	if (httpVersion == http_0_9) {
+		response = (char*) malloc(entitySize);
+		memcpy((void*) response, (const void*) entity, entitySize);
+		*responseSize = entitySize;
+	} else {/* proceed with a HTTP/1.X response */
+		/* status line */
+		char statusLine[64];
+		int statusSize = sprintf(statusLine, "HTTP/1.0 %s\n",
+				statusCode[status]);
 
-	/* rest of headers including content-length */
-	char headerLines[256];
-	int headersSize = sprintf(headerLines, serverHeader, entitySize,
-			contentType);
+		/* line with date */
+		char dateLine[40];
+		struct tm current;
+		now(&current);
+		int dateSize = dateToStr(dateLine, &current);
 
-	/* create response */
-	char *response = (char*) malloc(statusSize + dateSize + headersSize
-			+ entitySize);
-	int i, j = 0;
-	for (i = 0; i < statusSize; ++i)
-		response[j++] = statusLine[i];
-	for (i = 0; i < dateSize; ++i)
-		response[j++] = dateLine[i];
-	for (i = 0; i < headersSize; ++i)
-		response[j++] = headerLines[i];
-	for (i = 0; i < entitySize; ++i)
-		response[j++] = entity[i];
-	*responseSize = j;
+		/* rest of headers including content-length */
+		char headerLines[256];
+		int headersSize = sprintf(headerLines, serverHeader, entitySize,
+				contentType);
+
+		/* create response */
+		response = (char*) malloc(statusSize + dateSize + headersSize
+				+ entitySize);
+		int i, j = 0;
+		for (i = 0; i < statusSize; ++i)
+			response[j++] = statusLine[i];
+		for (i = 0; i < dateSize; ++i)
+			response[j++] = dateLine[i];
+		for (i = 0; i < headersSize; ++i)
+			response[j++] = headerLines[i];
+		for (i = 0; i < entitySize; ++i)
+			response[j++] = entity[i];
+		*responseSize = j;
+	}
 	return response;
 }
 
@@ -141,16 +169,22 @@ char* makeResponseBody(enum codes status, const char *contentType,
  * @param[out] responseSize Will contain size of created response
  * @return Full HTTP/1.0 response with requested URI or an error page
  */
-char* createResponse(struct bstrList *requestList, int *responseSize) {
+char* createResponse(struct bstrList *requestList, int *responseSize, int sockd) {
 	bstring method = 0, uri = 0, version = 0;
+	int fd;
+	int ignoreDate = 1;
 	char *response;
 	struct bstrList *currentLine = 0;
+	struct tm reqestedDate, lastMod;
+
+	int httpVersion = http_1_0;
 
 	/* read request line */
 	currentLine = bsplit(requestList->entry[0], ' ');
 	if (currentLine->qty != 3) {
 		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
-				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+				strlen(badRequestPage), (char*) badRequestPage, responseSize,
+				httpVersion);
 		goto ResponseCreated;
 	}
 
@@ -161,12 +195,13 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 	/* filter empty requests */
 	if (!method->slen || !uri->slen || !version->slen) {
 		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
-				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+				strlen(badRequestPage), (char*) badRequestPage, responseSize,
+				httpVersion);
 		goto ResponseCreated;
 	}
 
 	/* check http version */
-	int httpVersion;
+
 	if (!(strncmp((const char*) version->data, "HTTP/0.9", 8)))
 		httpVersion = http_0_9;
 	else if (!(strncmp((const char*) version->data, "HTTP/1.0", 8)))
@@ -175,7 +210,8 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 		httpVersion = http_1_1;
 	else {
 		response = makeResponseBody(badRequest, "text/html; charset=utf-8",
-				strlen(badRequestPage), (char*) badRequestPage, responseSize);
+				strlen(badRequestPage), (char*) badRequestPage, responseSize,
+				httpVersion);
 		goto ResponseCreated;
 	}
 
@@ -237,7 +273,7 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 						realm[i].name);
 				response = makeResponseBody(unauthorized, additionalHeader,
 						strlen(unauthorizedPage), (char*) unauthorizedPage,
-						responseSize);
+						responseSize, httpVersion);
 				goto ResponseCreated;
 				/* if access is authentitaced, yet authorization fails
 				 * send 403 Forbidden */
@@ -245,7 +281,7 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 					realm[i].pass)) {
 				response = makeResponseBody(forbidden,
 						"text/html; charset=utf-8", strlen(forbiddenPage),
-						(char*) forbiddenPage, responseSize);
+						(char*) forbiddenPage, responseSize, httpVersion);
 				goto ResponseCreated;
 			}
 		}
@@ -254,16 +290,17 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 		if (blength(uri) == 1 && uri->data[0] == '/') {
 			char *listPage = createListPage("");
 			response = makeResponseBody(ok, "text/html; charset=utf-8", strlen(
-					listPage), listPage, responseSize);
+					listPage), listPage, responseSize, httpVersion);
 			free(listPage);
 			goto ResponseCreated;
 		}
 
 		/* check if resource exists */
-		int fd = openat(AT_FDCWD, (const char*) &uri->data[1], O_RDONLY);
+		fd = openat(AT_FDCWD, (const char*) &uri->data[1], O_RDONLY);
 		if (fd < 0) {
 			response = makeResponseBody(notFound, "text/html; charset=utf-8",
-					strlen(notFoundPage), (char*) notFoundPage, responseSize);
+					strlen(notFoundPage), (char*) notFoundPage, responseSize,
+					httpVersion);
 			goto ResponseCreated;
 		}
 
@@ -281,12 +318,12 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 						"text/html; charset=utf-8\nLocation: http://localhost:6666%s/",
 						uri->data);
 				response = makeResponseBody(movedPermanently, additionalHeader,
-						0, 0, responseSize);
+						0, 0, responseSize, httpVersion);
 				goto ResponseCreated;
 			}
 			char *listPage = createListPage((char*) uri->data);
 			response = makeResponseBody(ok, "text/html; charset=utf-8", strlen(
-					listPage), listPage, responseSize);
+					listPage), listPage, responseSize, httpVersion);
 			free(listPage);
 			goto ResponseCreated;
 		}
@@ -308,26 +345,179 @@ char* createResponse(struct bstrList *requestList, int *responseSize) {
 			contentType = mimeTypes[j];
 		}
 
-		/* read requested URI and create a response out of it */
-		int size = lseek(fd, 0, SEEK_END);
-		char *buffer = (char*) malloc(size);
-		lseek(fd, SEEK_SET, 0);
-		read(fd, buffer, size);
-		response
-				= makeResponseBody(ok, contentType, size, buffer, responseSize);
-		free(buffer);
-		goto ResponseCreated;
+		/* handle the if-modified-since header */
+		for (i = 0; i < requestList->qty; i++)
+			if (bisstemeqblk(requestList->entry[i], "If-Modified-Since: ",
+					strlen("If-Modified-Since: "))) {
+				close(fd);
+				fileModDate((const char *) &uri->data[1], &lastMod);
 
+				bdelete(requestList->entry[i], 0, strlen("If-Modified-Since: "));
+				parseDate(bdata(requestList->entry[i]),&reqestedDate);
+				ignoreDate = 0;
+
+			}
+
+		/* read requested URI and create a response out of it */
+		if ((ignoreDate) || (compareDates(&reqestedDate, &lastMod) >= 0)) {
+			openat(AT_FDCWD, (const char*) &uri->data[1], O_RDONLY);
+			int size = lseek(fd, 0, SEEK_END);
+			char *buffer = (char*) malloc(size);
+			lseek(fd, SEEK_SET, 0);
+			read(fd, buffer, size);
+			response = makeResponseBody(ok, contentType, size, buffer,
+					responseSize, httpVersion);
+			free(buffer);
+			goto ResponseCreated;
+		} else {
+			response = makeResponseBody(notModified, "text/html", 0,
+					(char *) 0, responseSize, httpVersion);
+			goto ResponseCreated;
+		}
 		/* POST */
 	} else if (biseqcstr(currentLine->entry[0], "POST")) {
+		bstring content;
+
+		struct bstrList *tempLine;
+		struct bstrList *nameValue;
+		int requestContentLen = -1;
+
+		/* get content length */
+		for (i = 0; i < requestList->qty; i++) {
+			tempLine = bsplit(requestList->entry[i], ' ');
+			if (biseqcstr(tempLine->entry[0], "Content-Length:")) {
+				requestContentLen
+						= atoi((const char*) tempLine->entry[1]->data);
+				break;
+			}
+			bstrListDestroy(tempLine);
+		}
+
+		/* bad request */
+		if (requestContentLen < 0) {
+			response = makeResponseBody(badRequest, "text/html; charset=utf-8",
+					strlen(badRequestPage), (char *) badRequestPage,
+					responseSize, httpVersion);
+
+		}
+
+		/* get content and process it */
+		else {
+
+			char * temp;
+			temp = (char *) malloc(requestContentLen + 1);
+
+			read(sockd, temp, requestContentLen);
+			temp[requestContentLen] = '\0';
+			content = bfromcstr(temp);
+			free(temp);
+
+			tempLine = bsplit(content, '&');
+
+			/* for each name=value pair */
+			for (i = 0; i < tempLine->qty; i++) {
+				nameValue = bsplit(tempLine->entry[i], '=');
+
+				/* get param name */
+				if (biseqcstr(nameValue->entry[0], "filename")) {
+					fd = openat(AT_FDCWD,
+							(const char*) nameValue->entry[1]->data, O_RDONLY);
+					/* create */
+					if (fd < 0) {
+
+						fd = openat(AT_FDCWD,
+								(const char*) nameValue->entry[1]->data, O_RDWR
+										| O_CREAT, 0666);
+
+						lseek(fd, SEEK_SET,0);
+					}
+					/* append */
+					else {
+						close(fd);
+						openat(AT_FDCWD,
+								(const char*) nameValue->entry[1]->data, O_RDWR
+										| O_APPEND);
+						lseek(fd, SEEK_END,0);
+
+					}
+
+				}
+				/* save the phrase */
+				else if (biseqcstr(nameValue->entry[0], "phrase")) {
+
+					/* for handling char-coding issues */
+					bstring plus = bfromcstr("+");
+					bstring wspace = bfromcstr(" ");
+					bfindreplace(nameValue->entry[1], plus, wspace, 0);
+
+					/* save phrase */
+					write(fd, (const char *) bdata(nameValue->entry[1]), nameValue->entry[1]->slen);
+					write(fd, (const char *) "\n", 1);
+					lseek(fd, SEEK_SET,0);
+					i = 0;
+					temp = malloc(4096);
+					while (read(fd, &temp[i++], 1) > 0)
+						;
+
+					response = makeResponseBody(created,
+							"text/plain; charset=utf-8", i, temp, responseSize,
+							httpVersion);
+					close(fd);
+
+					free(temp);
+					bdestroy(plus);
+					bdestroy(wspace);
+				}
+
+				bstrListDestroy(nameValue);
+			}
+
+			bstrListDestroy(tempLine);
+
+		}
 
 		/* HEAD */
 	} else if (biseqcstr(currentLine->entry[0], "HEAD")) {
+		bdelete(currentLine->entry[1], 0, 1); // to remove unnecessary "/" character
+
+
+		fd = openat(AT_FDCWD, (const char*) currentLine->entry[1]->data,
+				O_RDONLY);
+
+		if (fd < 0)
+			response = makeResponseBody(notFound, "text/html; charset=utf-8",
+					0, (char*) 0, responseSize, httpVersion);
+		else {
+			/* don't need content in HEAD method */
+			close(fd);
+
+			/* distinguish file type from extension */
+			int i, j, k;
+			char *contentType = "application/octet-stream";
+			char *data = (char*) bdata(currentLine->entry[1]);
+			for (i = currentLine->entry[1]->slen - 1; i >= 0; --i)
+				if (data[i] == '.')
+					break;
+			if (i > 0) {
+				char extension[currentLine->entry[1]->slen - i];
+				for (k = 0, j = i + 1; j < currentLine->entry[1]->slen; ++j, ++k)
+					extension[k] = tolower(data[j]);
+				extension[k] = 0;
+
+				for (j = 0; j < mimeTypeCount; ++j)
+					if (!(strcmp(extension, mimeExtensions[j])))
+						break;
+				contentType = mimeTypes[j];
+			}
+
+			response = makeResponseBody(ok, contentType, 0, (char *) 0,
+					responseSize, httpVersion);
+		}
 
 	} else
 		return makeResponseBody(notImplemented, "text/html; charset=utf-8",
 				strlen(notImplementedPage), (char*) notImplementedPage,
-				responseSize);
+				responseSize, httpVersion);
 
 	/* clean up all the structures used */
 	ResponseCreated: if (method)
@@ -410,23 +600,23 @@ int main(int argc, char* argv[]) {
 				realm[realmCount].name[i - 1] = 0;
 				isRealm = true;
 				realm[realmCount].count = 0;
-			/* line with login is like: login=%s */
+				/* line with login is like: login=%s */
 			} else if (isRealm && !(strncmp(line, "login=", 6))) {
 				for (i = 6; i < strlen(line) - 1; ++i)
 					realm[realmCount].login[i - 6] = line[i];
 				realm[realmCount].login[i - 6] = 0;
-			/* line with password is like: pass=%s */
+				/* line with password is like: pass=%s */
 			} else if (isRealm && !(strncmp(line, "pass=", 5))) {
 				for (i = 5; i < strlen(line) - 1; ++i)
 					realm[realmCount].pass[i - 5] = line[i];
 				realm[realmCount].pass[i - 5] = 0;
-			/* lines with URIs are like: uri=%s */
+				/* lines with URIs are like: uri=%s */
 			} else if (isRealm && !(strncmp(line, "uri=", 4))) {
 				for (i = 4; i < strlen(line) - 1; ++i)
 					realm[realmCount].uri[realm[realmCount].count][i - 4]
 							= line[i];
 				realm[realmCount].uri[realm[realmCount].count++][i - 4] = 0;
-			/* empty line finishes one realm configuration */
+				/* empty line finishes one realm configuration */
 			} else if (line[0] == '\n') {
 				++realmCount;
 				isRealm = false;
@@ -585,43 +775,21 @@ int main(int argc, char* argv[]) {
 				myInfo = shmat(infoId, 0, 0);
 				myInfo[i].status = working;
 
-				fd_set fsClient;
-				FD_ZERO(&fsClient);
-
 				/* *************************************************************/
 				/* communication process */
 				int exitRes = 0;
-				while (myInfo[i].status == working) {
-					FD_SET(clientSocket, &fsClient);
 
-					struct timeval tout;
-					tout.tv_sec = clientTimeout;
-					tout.tv_usec = 0;
+				/* read the socket */
+				struct bstrList *tempList = getRequest(clientSocket);
+				int responseSize;
+				char *response = createResponse(tempList, &responseSize,
+						clientSocket);
+				write(clientSocket, response, responseSize);
+				free(response);
+				bstrListDestroy(tempList);
 
-					int selectRes = select(clientSocket + 1, &fsClient,
-							(fd_set*) 0, (fd_set*) 0, &tout);
-
-					if (selectRes < 0) {
-						exitRes = 1;
-						break;
-					} else if (!selectRes) {
-						break;
-					}
-
-					if (FD_ISSET(clientSocket, &fsClient)) {
-						/* read the socket */
-						struct bstrList *tempList = getRequest(clientSocket);
-						int responseSize;
-						char *response =
-								createResponse(tempList, &responseSize);
-						write(clientSocket, response, responseSize);
-						free(response);
-						bstrListDestroy(tempList);
-					}
-				}
 				/* ************************************************************/
 
-				FD_ZERO(&fsClient);
 				myInfo[i].status = stopped;
 				shmdt(myInfo);
 				exit(exitRes);
@@ -633,9 +801,19 @@ int main(int argc, char* argv[]) {
 
 	/* cleaning client data */
 	if (clientNumber > 0) {
-		for (i = 0; i < maxConnections; i++)
+		char msg[20];
+		for (i = 0; i < maxConnections; i++) {
+			if (clients[i].status == working) {
+
+				sprintf(msg, "kill -9 %d", clients[i].procid);
+
+				printf("%s\n", msg);
+				system((const char*) msg);
+			}
 			clients[i].status = finished;
-		sleep(clientTimeout + 1);
+
+		}
+
 		for (i = 0; i < maxConnections; i++)
 			close(clients[i].sockd);
 	}
