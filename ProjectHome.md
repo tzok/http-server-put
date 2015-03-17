@@ -1,0 +1,1 @@
+We are students of Poznań University of Technology. Our project for Computer Networks was to implement RFC 1945 (HTTP 1.0)
